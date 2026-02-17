@@ -52,7 +52,7 @@ CONFIG = {
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format='%(asctime)s [%(levelname)] %(message)s',
     handlers=[logging.StreamHandler()]
 )
 log = logging.getLogger(__name__)
@@ -498,6 +498,13 @@ class TradingBot:
 
     def run(self):
         log.info("🚀 LZ Trading Bot v2.1")
+        
+        # Vérification de l'heure système
+        now_ts = int(time.time())
+        now_dt = datetime.utcfromtimestamp(now_ts)
+        log.info(f"⏰ Timestamp système : {now_ts} ({now_dt})")
+        if now_dt.year > 2025:
+            log.warning("⚠️ L'heure du serveur semble incorrecte (Année > 2025)")
 
         for sym in self.symbols:
             info = CONFIG["instruments"][sym]
@@ -577,15 +584,30 @@ class TradingBot:
                  f"Compte: {info['fullname']}\n"
                  f"Solde: {info['balance']}$")
 
+        # ✅ CORRECTION : Utilisation explicite de start/end (Unix Timestamp)
+        end_ts = int(time.time())
+        log.info(f"🕒 Demande d'historique : end={end_ts}")
+
         for sym in self.symbols:
+            # Historique M15 (900s)
+            start_ts_m15 = end_ts - (CONFIG["m15_bars"] * 900)
             self.ws.send(json.dumps({
-                "ticks_history": sym, "style": "candles",
-                "granularity": 900, "count": CONFIG["m15_bars"],
+                "ticks_history": sym,
+                "style": "candles",
+                "granularity": 900,
+                "start": start_ts_m15,  # ✅ Entier Unix
+                "end": end_ts,          # ✅ Entier Unix
                 "subscribe": 1
             }))
+            
+            # Historique M1 (60s)
+            start_ts_m1 = end_ts - (200 * 60)
             self.ws.send(json.dumps({
-                "ticks_history": sym, "style": "candles",
-                "granularity": 60, "count": 200,
+                "ticks_history": sym,
+                "style": "candles",
+                "granularity": 60,
+                "start": start_ts_m1,   # ✅ Entier Unix
+                "end": end_ts,          # ✅ Entier Unix
                 "subscribe": 1
             }))
 
