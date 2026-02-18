@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-╔═══════════════════════════════════════╗
-║   LIQUIDITY ZONE TRADING BOT v2.1     ║
-║   V10(30min) V25(15min) V75(15min)    ║
-║   Touches: 10 | Railway Edition       ║
-╚═══════════════════════════════════════╝
+LIQUIDITY ZONE TRADING BOT v2.1
+V10(30min) V25(15min) V75(15min)
+Touches: 10 | Railway Edition
 """
 
 import websocket
@@ -34,7 +32,7 @@ CONFIG = {
     },
 
     "stake"              : 1.0,
-    "cooldown"           : 5,
+    "cooldown"           : 5,      # minutes entre 2 signaux sur le même symbole
     "payout"             : 95.0,
     "use_doji"           : True,
     "zz_depth"           : 12,
@@ -51,7 +49,7 @@ CONFIG = {
 # ============================================================
 
 logging.basicConfig(
-    level=logging.INFO,   # <= IMPORTANT
+    level=logging.INFO,   # IMPORTANT: pas de DEBUG flood
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -562,7 +560,6 @@ class TradingBot:
                 return
 
             mt = data.get("msg_type", "")
-            log.debug("MSG_TYPE=%s", mt)
 
             if mt == "authorize":       self._auth(data)
             elif mt == "candles":       self._hist(data)
@@ -586,7 +583,7 @@ class TradingBot:
         log.info("Demande historique: end=%d", end_ts)
 
         for sym in self.symbols:
-            # Historique M15 (900s)
+            # M15
             start_ts_m15 = end_ts - (CONFIG["m15_bars"] * 900)
             self.ws.send(json.dumps({
                 "ticks_history": sym,
@@ -596,8 +593,7 @@ class TradingBot:
                 "end": end_ts,
                 "subscribe": 1
             }))
-            
-            # Historique M1 (60s)
+            # M1
             start_ts_m1 = end_ts - (200 * 60)
             self.ws.send(json.dumps({
                 "ticks_history": sym,
@@ -609,11 +605,6 @@ class TradingBot:
             }))
 
     def _hist(self, data):
-        """
-        Réception de l'historique (et flux) des bougies.
-        - granularity = 900 -> M15 : zones
-        - granularity = 60  -> M1  : signaux
-        """
         req  = data.get("echo_req", {})
         sym  = req.get("ticks_history", "")
         gran = req.get("granularity", 60)
@@ -626,7 +617,6 @@ class TradingBot:
             return
 
         info = CONFIG["instruments"][sym]
-        log.debug("[HIST] sym=%s gran=%s nb_candles=%d", sym, gran, len(candles_data))
 
         if gran == 900 or str(gran) == "900":
             # M15
@@ -646,31 +636,25 @@ class TradingBot:
         elif gran == 60 or str(gran) == "60":
             # M1
             buf = self.m1[sym]
-
             for c in candles_data:
                 candle = Candle(
                     float(c["open"]), float(c["high"]),
                     float(c["low"]),  float(c["close"]),
                     int(c["epoch"])
                 )
-
                 if buf and candle.time == buf[-1].time:
                     buf[-1] = candle
                 else:
                     buf.append(candle)
 
-            # Une fois qu'on a un historique suffisant, on marque M1 comme prêt
             if len(buf) >= 50 and not self.m1_ok[sym]:
                 self.m1_ok[sym] = True
                 log.info("%s | M1 pret (%d bougies)", info["name"], len(buf))
 
-            # Si les deux historiques sont prêts, on peut commencer à chercher des signaux
-            # sur la dernière bougie M1
             if self.m1_ok[sym] and self.m15_ok[sym] and len(buf) >= 3:
                 self._check_signal(sym)
 
     def _ohlc(self, data):
-        # Garde pour le cas où Deriv envoie aussi des 'ohlc'
         ohlc = data.get("ohlc", {})
         sym  = ohlc.get("symbol", "")
         gran = int(ohlc.get("granularity", 60))
@@ -698,56 +682,55 @@ class TradingBot:
                 buf[-1] = candle
 
     def _check_signal(self, sym):
-        log.debug("[CHECK] Symbole=%s", sym)
-
+        # Reset journalier
         if datetime.now().day != self.last_day:
             self.daily_profit = 0
             self.daily_trades = 0
             self.last_day = datetime.now().day
             telegram("🔄 <b>Nouveau jour</b>\n\n" + self.stats.format_all())
 
+        # Conditions globales
         if not self.m15_ok.get(sym) or not self.m1_ok.get(sym):
-            log.debug("[CHECK] %s: historiques pas prets (m15_ok=%s, m1_ok=%s)",
-                      sym, self.m15_ok.get(sym), self.m1_ok.get(sym))
             return
 
         if self.daily_trades >= CONFIG["max_trades_per_day"]:
-            log.debug("[CHECK] %s: max trades/jour atteint (%d)",
-                      sym, self.daily_trades)
             return
 
         if self.daily_profit <= CONFIG["daily_stop_loss"]:
-            log.debug("[CHECK] %s: daily stop loss atteint (profit=%.2f)",
-                      sym, self.daily_profit)
             return
 
         now = time.time()
         last = self.last_sig.get(sym, 0)
         if now - last < CONFIG["cooldown"] * 60:
-            log.debug("[CHECK] %s: cooldown (%.1f s < %.1f s)",
-                      sym, now - last, CONFIG["cooldown"] * 60)
             return
 
         candles = list(self.m1[sym])
         if len(candles) < 3:
-            log.debug("[CHECK] %s: pas assez de bougies M1 (%d)", sym, len(candles))
             return
 
         current = candles[-1]
         zone = self.zd.find_zone(current, self.zones[sym], current.time)
         if zone is None:
-            log.debug(
-                "[CHECK] %s: aucune zone touchee. dernier candle: t=%d o=%.5f h=%.5f l=%.5f c=%.5f",
-                sym, current.time, current.open, current.high, current.low, current.close
-            )
+            # aucune zone touchée, on sort sans log
             return
+
+        # LOG quand une zone est touchée
+        log.info(
+            "[TOUCH] %s | zone type=%d | zone[%.5f - %.5f] | candle o=%.5f h=%.5f l=%.5f c=%.5f",
+            sym, zone.type, zone.low, zone.high,
+            current.open, current.high, current.low, current.close
+        )
 
         direction, pattern = Patterns.scan(candles, zone.type)
         if direction == 0:
-            log.debug("[CHECK] %s: zone touchee (type=%d) mais aucun pattern",
-                      sym, zone.type)
+            # zone touchée mais aucun pattern valide
+            log.info(
+                "[NOPATTERN] %s | zone type=%d touchee mais aucun pattern detecte",
+                sym, zone.type
+            )
             return
 
+        # SIGNAL: zone touchée + pattern valide
         zone.touch_count += 1
         self.last_sig[sym] = now
         ctype = "CALL" if direction == 1 else "PUT"
