@@ -51,7 +51,7 @@ CONFIG = {
 # ============================================================
 
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG pour voir les détails; repasse à INFO après debug si tu veux
+    level=logging.DEBUG,  # DEBUG pour debug; repasse à INFO ensuite si tu veux
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -214,7 +214,6 @@ class ZoneDetector:
 # ============================================================
 
 class Patterns:
-
     @staticmethod
     def scan(candles, zone_type):
         if len(candles) < 3:
@@ -330,7 +329,6 @@ class Patterns:
 # ============================================================
 
 class Stats:
-
     def __init__(self):
         self.results = []
 
@@ -454,7 +452,7 @@ class Stats:
                 t.is_win = d["win"]
                 t.profit = d["profit"]
                 self.results.append(t)
-            log.info("%d resultats chargés", len(self.results))
+            log.info("%d resultats charges", len(self.results))
         except:
             pass
 
@@ -463,7 +461,6 @@ class Stats:
 # ============================================================
 
 class TradingBot:
-
     def __init__(self):
         self.ws = None
         self.authorized = False
@@ -497,7 +494,7 @@ class TradingBot:
         self.zd = ZoneDetector()
 
     def run(self):
-        log.info("LZ Trading Bot v2.1 démarre")
+        log.info("LZ Trading Bot v2.1 demarre")
         
         now_ts = int(time.time())
         now_dt = datetime.utcfromtimestamp(now_ts)
@@ -613,8 +610,7 @@ class TradingBot:
 
     def _hist(self, data):
         """
-        Reception de l'historique (et flux) des bougies.
-
+        Réception de l'historique (et flux) des bougies.
         - granularity = 900 -> M15 : zones
         - granularity = 60  -> M1  : signaux
         """
@@ -630,9 +626,10 @@ class TradingBot:
             return
 
         info = CONFIG["instruments"][sym]
+        log.debug("[HIST] sym=%s gran=%s nb_candles=%d", sym, gran, len(candles_data))
 
-        if gran == 900:
-            # M15: zones
+        if gran == 900 or str(gran) == "900":
+            # M15
             for c in candles_data:
                 candle = Candle(
                     float(c["open"]), float(c["high"]),
@@ -646,8 +643,8 @@ class TradingBot:
             act = sum(1 for z in self.zones[sym] if z.broken_time == 0)
             log.info("%s | %d zones (%d actives)", info["name"], len(self.zones[sym]), act)
 
-        else:
-            # M1: signaux
+        elif gran == 60 or str(gran) == "60":
+            # M1
             buf = self.m1[sym]
 
             for c in candles_data:
@@ -658,18 +655,22 @@ class TradingBot:
                 )
 
                 if buf and candle.time == buf[-1].time:
-                    # mise à jour bougie en cours
                     buf[-1] = candle
                 else:
-                    # nouvelle bougie
                     buf.append(candle)
-                    if len(buf) >= 50:
-                        self._check_signal(sym)
 
-            self.m1_ok[sym] = True
-            log.info("%s | M1 pret (%d bougies)", info["name"], len(self.m1[sym]))
+            # Une fois qu'on a un historique suffisant, on marque M1 comme prêt
+            if len(buf) >= 50 and not self.m1_ok[sym]:
+                self.m1_ok[sym] = True
+                log.info("%s | M1 pret (%d bougies)", info["name"], len(buf))
+
+            # Si les deux historiques sont prêts, on peut commencer à chercher des signaux
+            # sur la dernière bougie M1
+            if self.m1_ok[sym] and self.m15_ok[sym] and len(buf) >= 3:
+                self._check_signal(sym)
 
     def _ohlc(self, data):
+        # Garde pour le cas où Deriv envoie aussi des 'ohlc'
         ohlc = data.get("ohlc", {})
         sym  = ohlc.get("symbol", "")
         gran = int(ohlc.get("granularity", 60))
@@ -691,7 +692,8 @@ class TradingBot:
             buf = self.m1[sym]
             if buf and candle.time != buf[-1].time:
                 buf.append(candle)
-                self._check_signal(sym)
+                if self.m1_ok[sym] and self.m15_ok[sym]:
+                    self._check_signal(sym)
             elif buf:
                 buf[-1] = candle
 
