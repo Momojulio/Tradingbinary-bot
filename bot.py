@@ -51,9 +51,10 @@ CONFIG = {
 # ============================================================
 
 logging.basicConfig(
-    level=logging.DEBUG,  # DEBUG pour debug; repasse à INFO ensuite si tu veux
+    level=logging.INFO,   # <= IMPORTANT
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
+)
 )
 log = logging.getLogger(__name__)
 
