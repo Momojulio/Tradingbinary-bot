@@ -612,25 +612,68 @@ class TradingBot:
             }))
 
     def _hist(self, data):
-        req = data.get("echo_req", {})
-        sym = req.get("ticks_history", "")
-        gran = req.get("granularity", 60)
-        if sym not in self.symbols: return
+        """
+        Réception de l'historique (et éventuellement du flux) de bougies.
 
-        for c in data.get("candles", []):
-            candle = Candle(float(c["open"]), float(c["high"]),
-                           float(c["low"]), float(c["close"]),
-                           int(c["epoch"]))
-            if gran == 900: self.m15[sym].append(candle)
-            else:           self.m1[sym].append(candle)
+        - granularity = 900 → M15 : on remplit l'historique M15 et on recalcule les zones.
+        - granularity = 60  → M1  : on remplit l'historique M1 et on commence à vérifier
+                                     les signaux dès qu'on a assez de bougies.
+        """
+        req  = data.get("echo_req", {})
+        sym  = req.get("ticks_history", "")
+        gran = req.get("granularity", 60)
+
+        if sym not in self.symbols:
+            return
+
+        candles_data = data.get("candles", [])
+        if not candles_data:
+            return
 
         info = CONFIG["instruments"][sym]
+
         if gran == 900:
+            # ===============================
+            #        M15 : ZONES
+            # ===============================
+            for c in candles_data:
+                candle = Candle(
+                    float(c["open"]), float(c["high"]),
+                    float(c["low"]),  float(c["close"]),
+                    int(c["epoch"])
+                )
+                self.m15[sym].append(candle)
+
             self.m15_ok[sym] = True
             self.zones[sym] = self.zd.compute_zones(self.m15[sym])
             act = sum(1 for z in self.zones[sym] if z.broken_time == 0)
             log.info(f"📍 {info['name']} | {len(self.zones[sym])} zones ({act} actives)")
+
         else:
+            # ===============================
+            #        M1 : SIGNAUX
+            # ===============================
+            buf = self.m1[sym]
+
+            for c in candles_data:
+                candle = Candle(
+                    float(c["open"]), float(c["high"]),
+                    float(c["low"]),  float(c["close"]),
+                    int(c["epoch"])
+                )
+
+                # Si même timestamp -> mise à jour de la bougie en cours
+                if buf and candle.time == buf[-1].time:
+                    buf[-1] = candle
+                else:
+                    # Nouvelle bougie
+                    buf.append(candle)
+
+                    # À partir d'un certain historique M1, on peut commencer à chercher des signaux.
+                    # Ici : 50 bougies M1 minimum (tu peux augmenter ce seuil si tu veux).
+                    if len(buf) >= 50:
+                        self._check_signal(sym)
+
             self.m1_ok[sym] = True
             log.info(f"📊 {info['name']} | M1 prêt ({len(self.m1[sym])} bougies)")
 
