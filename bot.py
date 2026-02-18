@@ -2,8 +2,8 @@
 """
 ╔═══════════════════════════════════════╗
 ║   LIQUIDITY ZONE TRADING BOT v2.1     ║
-║   V10(30min) V25(15min) V75(15min)     ║
-║   Touches: 10 | Railway Edition        ║
+║   V10(30min) V25(15min) V75(15min)    ║
+║   Touches: 10 | Railway Edition       ║
 ╚═══════════════════════════════════════╝
 """
 
@@ -51,8 +51,8 @@ CONFIG = {
 # ============================================================
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)] %(message)s',
+    level=logging.DEBUG,  # DEBUG pour voir les détails; repasse à INFO après debug si tu veux
+    format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
 log = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ def telegram(message):
             "parse_mode": "HTML"
         }, timeout=10)
     except Exception as e:
-        log.error(f"Telegram erreur: {e}")
+        log.error("Telegram error: %s", e)
 
 # ============================================================
 #                  STRUCTURES
@@ -225,16 +225,16 @@ class Patterns:
         if zone_type == 1:
             if Patterns._bull_engulf(c, i):  return 1, "Engulfing Haussier"
             if Patterns._hammer(c, i):       return 1, "Marteau"
-            if Patterns._bull_pin(c, i):     return 1, "Pin Bar Haussière"
-            if Patterns._morning(c, i):      return 1, "Étoile du Matin"
+            if Patterns._bull_pin(c, i):     return 1, "Pin Bar Haussiere"
+            if Patterns._morning(c, i):      return 1, "Etoile du Matin"
             if CONFIG["use_doji"] and Patterns._doji(c, i, 1):
                 return 1, "Doji Haussier"
 
         if zone_type == -1:
             if Patterns._bear_engulf(c, i):  return -1, "Engulfing Baissier"
-            if Patterns._shooting(c, i):     return -1, "Étoile Filante"
-            if Patterns._bear_pin(c, i):     return -1, "Pin Bar Baissière"
-            if Patterns._evening(c, i):      return -1, "Étoile du Soir"
+            if Patterns._shooting(c, i):     return -1, "Etoile Filante"
+            if Patterns._bear_pin(c, i):     return -1, "Pin Bar Baissiere"
+            if Patterns._evening(c, i):      return -1, "Etoile du Soir"
             if CONFIG["use_doji"] and Patterns._doji(c, i, -1):
                 return -1, "Doji Baissier"
 
@@ -454,7 +454,7 @@ class Stats:
                 t.is_win = d["win"]
                 t.profit = d["profit"]
                 self.results.append(t)
-            log.info(f"📂 {len(self.results)} résultats chargés")
+            log.info("%d resultats chargés", len(self.results))
         except:
             pass
 
@@ -497,21 +497,20 @@ class TradingBot:
         self.zd = ZoneDetector()
 
     def run(self):
-        log.info("🚀 LZ Trading Bot v2.1")
+        log.info("LZ Trading Bot v2.1 démarre")
         
-        # Vérification de l'heure système
         now_ts = int(time.time())
         now_dt = datetime.utcfromtimestamp(now_ts)
-        log.info(f"⏰ Timestamp système : {now_ts} ({now_dt})")
+        log.info("Timestamp systeme : %d (%s)", now_ts, now_dt)
         if now_dt.year > 2025:
-            log.warning("⚠️ L'heure du serveur semble incorrecte (Année > 2025)")
+            log.warning("Heure du serveur semble incorrecte (annee > 2025)")
 
         for sym in self.symbols:
             info = CONFIG["instruments"][sym]
-            log.info(f"📊 {info['name']} | Expiry: {info['expiry']}min")
+            log.info("%s | Expiry: %d min", info["name"], info["expiry"])
 
-        log.info(f"💰 Mise: {CONFIG['stake']}$")
-        log.info(f"🔄 Touches max: {CONFIG['max_touches']}")
+        log.info("Mise: %.2f $", CONFIG["stake"])
+        log.info("Touches max: %d", CONFIG["max_touches"])
 
         inst_list = ""
         for sym in self.symbols:
@@ -519,12 +518,12 @@ class TradingBot:
             inst_list += f"  • {info['name']}: {info['expiry']}min\n"
 
         telegram(
-            f"🚀 <b>LZ Trading Bot v2.1 démarré</b>\n"
+            f"🚀 <b>LZ Trading Bot v2.1 demarre</b>\n"
             f"☁️ Railway\n\n"
             f"📊 <b>Instruments:</b>\n{inst_list}\n"
             f"💰 Mise: {CONFIG['stake']}$\n"
             f"🔄 Touches: {CONFIG['max_touches']}\n"
-            f"⚡ Trades simultanés: OUI"
+            f"⚡ Trades simultanes: OUI"
         )
 
         url = (f"wss://ws.binaryws.com/websockets/v3"
@@ -542,30 +541,32 @@ class TradingBot:
                 self.ws.run_forever(ping_interval=30,
                                     ping_timeout=10)
             except Exception as e:
-                log.error(f"❌ {e}")
+                log.error("WS loop error: %s", e)
 
-            log.info("🔄 Reconnexion dans 5s...")
+            log.info("Reconnexion dans 5s...")
             time.sleep(5)
 
     def _on_open(self, ws):
-        log.info("🔌 Connecté à Deriv")
+        log.info("Connecte a Deriv (on_open)")
         ws.send(json.dumps({"authorize": CONFIG["deriv_token"]}))
 
     def _on_err(self, ws, error):
-        log.error(f"❌ WS: {error}")
+        log.error("WS error: %s", error)
 
     def _on_close(self, ws, code, msg):
-        log.info(f"🔌 Déconnecté ({code})")
+        log.info("Deconnecte (%s)", code)
         self.authorized = False
 
     def _on_msg(self, ws, message):
         try:
             data = json.loads(message)
             if "error" in data:
-                log.error(f"❌ API: {data['error']['message']}")
+                log.error("API error: %s", data["error"]["message"])
                 return
 
             mt = data.get("msg_type", "")
+            log.debug("MSG_TYPE=%s", mt)
+
             if mt == "authorize":       self._auth(data)
             elif mt == "candles":       self._hist(data)
             elif mt == "ohlc":          self._ohlc(data)
@@ -573,20 +574,19 @@ class TradingBot:
             elif mt == "proposal_open_contract": self._contract(data)
 
         except Exception as e:
-            log.error(f"❌ Message: {e}")
+            log.error("Message parse error: %s", e)
 
     def _auth(self, data):
         info = data["authorize"]
-        log.info(f"✅ {info['fullname']} | Solde: {info['balance']}$")
+        log.info("Compte: %s | Solde: %.2f $", info["fullname"], info["balance"])
         self.authorized = True
 
-        telegram(f"✅ <b>Connecté</b>\n"
+        telegram(f"✅ <b>Connecte</b>\n"
                  f"Compte: {info['fullname']}\n"
                  f"Solde: {info['balance']}$")
 
-        # ✅ CORRECTION : Utilisation explicite de start/end (Unix Timestamp)
         end_ts = int(time.time())
-        log.info(f"🕒 Demande d'historique : end={end_ts}")
+        log.info("Demande historique: end=%d", end_ts)
 
         for sym in self.symbols:
             # Historique M15 (900s)
@@ -595,8 +595,8 @@ class TradingBot:
                 "ticks_history": sym,
                 "style": "candles",
                 "granularity": 900,
-                "start": start_ts_m15,  # ✅ Entier Unix
-                "end": end_ts,          # ✅ Entier Unix
+                "start": start_ts_m15,
+                "end": end_ts,
                 "subscribe": 1
             }))
             
@@ -606,18 +606,17 @@ class TradingBot:
                 "ticks_history": sym,
                 "style": "candles",
                 "granularity": 60,
-                "start": start_ts_m1,   # ✅ Entier Unix
-                "end": end_ts,          # ✅ Entier Unix
+                "start": start_ts_m1,
+                "end": end_ts,
                 "subscribe": 1
             }))
 
     def _hist(self, data):
         """
-        Réception de l'historique (et éventuellement du flux) de bougies.
+        Reception de l'historique (et flux) des bougies.
 
-        - granularity = 900 → M15 : on remplit l'historique M15 et on recalcule les zones.
-        - granularity = 60  → M1  : on remplit l'historique M1 et on commence à vérifier
-                                     les signaux dès qu'on a assez de bougies.
+        - granularity = 900 -> M15 : zones
+        - granularity = 60  -> M1  : signaux
         """
         req  = data.get("echo_req", {})
         sym  = req.get("ticks_history", "")
@@ -633,9 +632,7 @@ class TradingBot:
         info = CONFIG["instruments"][sym]
 
         if gran == 900:
-            # ===============================
-            #        M15 : ZONES
-            # ===============================
+            # M15: zones
             for c in candles_data:
                 candle = Candle(
                     float(c["open"]), float(c["high"]),
@@ -647,12 +644,10 @@ class TradingBot:
             self.m15_ok[sym] = True
             self.zones[sym] = self.zd.compute_zones(self.m15[sym])
             act = sum(1 for z in self.zones[sym] if z.broken_time == 0)
-            log.info(f"📍 {info['name']} | {len(self.zones[sym])} zones ({act} actives)")
+            log.info("%s | %d zones (%d actives)", info["name"], len(self.zones[sym]), act)
 
         else:
-            # ===============================
-            #        M1 : SIGNAUX
-            # ===============================
+            # M1: signaux
             buf = self.m1[sym]
 
             for c in candles_data:
@@ -662,26 +657,24 @@ class TradingBot:
                     int(c["epoch"])
                 )
 
-                # Si même timestamp -> mise à jour de la bougie en cours
                 if buf and candle.time == buf[-1].time:
+                    # mise à jour bougie en cours
                     buf[-1] = candle
                 else:
-                    # Nouvelle bougie
+                    # nouvelle bougie
                     buf.append(candle)
-
-                    # À partir d'un certain historique M1, on peut commencer à chercher des signaux.
-                    # Ici : 50 bougies M1 minimum (tu peux augmenter ce seuil si tu veux).
                     if len(buf) >= 50:
                         self._check_signal(sym)
 
             self.m1_ok[sym] = True
-            log.info(f"📊 {info['name']} | M1 prêt ({len(self.m1[sym])} bougies)")
+            log.info("%s | M1 pret (%d bougies)", info["name"], len(self.m1[sym]))
 
     def _ohlc(self, data):
         ohlc = data.get("ohlc", {})
         sym  = ohlc.get("symbol", "")
         gran = int(ohlc.get("granularity", 60))
-        if sym not in self.symbols: return
+        if sym not in self.symbols:
+            return
 
         candle = Candle(float(ohlc["open"]), float(ohlc["high"]),
                        float(ohlc["low"]), float(ohlc["close"]),
@@ -703,34 +696,62 @@ class TradingBot:
                 buf[-1] = candle
 
     def _check_signal(self, sym):
+        log.debug("[CHECK] Symbole=%s", sym)
+
         if datetime.now().day != self.last_day:
             self.daily_profit = 0
             self.daily_trades = 0
             self.last_day = datetime.now().day
             telegram("🔄 <b>Nouveau jour</b>\n\n" + self.stats.format_all())
 
-        if not self.m15_ok.get(sym) or not self.m1_ok.get(sym): return
-        if self.daily_trades >= CONFIG["max_trades_per_day"]: return
-        if self.daily_profit <= CONFIG["daily_stop_loss"]: return
+        if not self.m15_ok.get(sym) or not self.m1_ok.get(sym):
+            log.debug("[CHECK] %s: historiques pas prets (m15_ok=%s, m1_ok=%s)",
+                      sym, self.m15_ok.get(sym), self.m1_ok.get(sym))
+            return
+
+        if self.daily_trades >= CONFIG["max_trades_per_day"]:
+            log.debug("[CHECK] %s: max trades/jour atteint (%d)",
+                      sym, self.daily_trades)
+            return
+
+        if self.daily_profit <= CONFIG["daily_stop_loss"]:
+            log.debug("[CHECK] %s: daily stop loss atteint (profit=%.2f)",
+                      sym, self.daily_profit)
+            return
 
         now = time.time()
-        if now - self.last_sig.get(sym, 0) < CONFIG["cooldown"] * 60: return
+        last = self.last_sig.get(sym, 0)
+        if now - last < CONFIG["cooldown"] * 60:
+            log.debug("[CHECK] %s: cooldown (%.1f s < %.1f s)",
+                      sym, now - last, CONFIG["cooldown"] * 60)
+            return
 
         candles = list(self.m1[sym])
-        if len(candles) < 3: return
+        if len(candles) < 3:
+            log.debug("[CHECK] %s: pas assez de bougies M1 (%d)", sym, len(candles))
+            return
 
         current = candles[-1]
         zone = self.zd.find_zone(current, self.zones[sym], current.time)
-        if zone is None: return
+        if zone is None:
+            log.debug(
+                "[CHECK] %s: aucune zone touchee. dernier candle: t=%d o=%.5f h=%.5f l=%.5f c=%.5f",
+                sym, current.time, current.open, current.high, current.low, current.close
+            )
+            return
 
         direction, pattern = Patterns.scan(candles, zone.type)
-        if direction == 0: return
+        if direction == 0:
+            log.debug("[CHECK] %s: zone touchee (type=%d) mais aucun pattern",
+                      sym, zone.type)
+            return
 
         zone.touch_count += 1
         self.last_sig[sym] = now
         ctype = "CALL" if direction == 1 else "PUT"
         info = CONFIG["instruments"][sym]
-        log.info(f"🎯 {ctype} {info['name']} | {pattern} | {info['expiry']}min")
+        log.info("[SIGNAL] %s %s | Pattern=%s | Expiry=%d min",
+                 ctype, info["name"], pattern, info["expiry"])
         self._trade(sym, ctype, current.close, pattern)
 
     def _trade(self, sym, ctype, price, pattern):
@@ -771,7 +792,7 @@ class TradingBot:
             self.open_trades[cid] = trade
             self.daily_trades += 1
             info = CONFIG["instruments"][trade.symbol]
-            log.info(f"📝 Trade ouvert | {info['name']} | ID: {cid}")
+            log.info("Trade ouvert | %s | ID: %s", info["name"], cid)
 
             self.ws.send(json.dumps({
                 "proposal_open_contract": 1,
@@ -782,7 +803,8 @@ class TradingBot:
     def _contract(self, data):
         poc = data.get("proposal_open_contract", {})
         cid = poc.get("contract_id")
-        if not poc.get("is_sold") or cid not in self.open_trades: return
+        if not poc.get("is_sold") or cid not in self.open_trades:
+            return
 
         trade = self.open_trades[cid]
         profit = float(poc.get("profit", 0))
@@ -796,9 +818,9 @@ class TradingBot:
         info = CONFIG["instruments"][trade.symbol]
 
         if trade.is_win:
-            log.info(f"✅ WIN +{profit:.2f}$ | {info['name']} {trade.direction}")
+            log.info("WIN +%.2f $ | %s %s", profit, info["name"], trade.direction)
         else:
-            log.info(f"❌ LOSS {profit:.2f}$ | {info['name']} {trade.direction}")
+            log.info("LOSS %.2f $ | %s %s", profit, info["name"], trade.direction)
 
         day = self.stats.today()
         sk = (f"{day['streak']}W" if day['streak'] > 0
@@ -827,13 +849,13 @@ if __name__ == "__main__":
     print("""
     ╔═══════════════════════════════════════╗
     ║   🎯 LIQUIDITY ZONE TRADING BOT v2.1  ║
-    ║                                        ║
+    ║                                       ║
     ║   V10 → 30min expiry                  ║
     ║   V25 → 15min expiry                  ║
     ║   V75 → 15min expiry                  ║
-    ║                                        ║
-    ║   Touches: 10 | Doji: ON             ║
-    ║   Trades simultanés: OUI             ║
+    ║                                       ║
+    ║   Touches: 10 | Doji: ON              ║
+    ║   Trades simultanés: OUI              ║
     ╚═══════════════════════════════════════╝
     """)
 
