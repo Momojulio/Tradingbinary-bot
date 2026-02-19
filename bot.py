@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LIQUIDITY ZONE TRADING BOT v2.1
-V10(30min) V25(15min) V75(15min)
+Zones M15 + Patterns M1
 Touches: 10 | Railway Edition
 """
 
@@ -25,14 +25,15 @@ CONFIG = {
     "telegram_chat_id" : os.getenv("TELEGRAM_CHAT_ID", ""),
     "telegram_enabled" : True,
 
+    # Expiration fixée à 5 min pour tous les actifs
     "instruments": {
-        "R_10": {"expiry": 30, "name": "Volatility 10"},
-        "R_25": {"expiry": 15, "name": "Volatility 25"},
-        "R_75": {"expiry": 15, "name": "Volatility 75"},
+        "R_10": {"expiry": 5, "name": "Volatility 10"},
+        "R_25": {"expiry": 5, "name": "Volatility 25"},
+        "R_75": {"expiry": 5, "name": "Volatility 75"},
     },
 
     "stake"              : 1.0,
-    "cooldown"           : 5,      # minutes entre 2 signaux sur le même symbole
+    "cooldown"           : 0,      # minutes entre 2 signaux sur le même symbole (0 = pas de cooldown)
     "payout"             : 95.0,
     "use_doji"           : True,
     "zz_depth"           : 12,
@@ -49,7 +50,7 @@ CONFIG = {
 # ============================================================
 
 logging.basicConfig(
-    level=logging.INFO,   # IMPORTANT: pas de DEBUG flood
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[logging.StreamHandler()]
 )
@@ -335,27 +336,69 @@ class Stats:
         self.save()
 
     def calc(self, from_time=0, symbol=None):
-        w = l = cw = cl = mw = ml = 0
+        w = l = 0
+        current_win_streak = 0
+        current_loss_streak = 0
+        max_w = max_l = 0
+
+        win_streaks = []
+        loss_streaks = []
+
         for r in self.results:
             if from_time > 0 and r.signal_time < from_time:
                 continue
             if symbol and r.symbol != symbol:
                 continue
-            if r.is_win:
-                w += 1; cw += 1; cl = 0
-                if cw > mw: mw = cw
-            else:
-                l += 1; cl += 1; cw = 0
-                if cl > ml: ml = cl
 
-        cs = cw if cw > 0 else -cl
+            if r.is_win:
+                w += 1
+                current_win_streak += 1
+                if current_loss_streak > 0:
+                    loss_streaks.append(current_loss_streak)
+                    current_loss_streak = 0
+                if current_win_streak > max_w:
+                    max_w = current_win_streak
+            else:
+                l += 1
+                current_loss_streak += 1
+                if current_win_streak > 0:
+                    win_streaks.append(current_win_streak)
+                    current_win_streak = 0
+                if current_loss_streak > max_l:
+                    max_l = current_loss_streak
+
+        # Ajouter la dernière série en cours
+        if current_win_streak > 0:
+            win_streaks.append(current_win_streak)
+        if current_loss_streak > 0:
+            loss_streaks.append(current_loss_streak)
+
+        # Série courante (positive = W, négative = L)
+        if current_win_streak > 0:
+            cs = current_win_streak
+        elif current_loss_streak > 0:
+            cs = -current_loss_streak
+        else:
+            cs = 0
+
         t = w + l
         wr = (w / t * 100) if t > 0 else 0
         p = (w * CONFIG["payout"] / 100) - l
+
+        avg_w = (sum(win_streaks) / len(win_streaks)) if win_streaks else 0.0
+        avg_l = (sum(loss_streaks) / len(loss_streaks)) if loss_streaks else 0.0
+
         return {
-            "wins": w, "losses": l, "total": t,
-            "winrate": wr, "profit": p,
-            "streak": cs, "max_w": mw, "max_l": ml
+            "wins"          : w,
+            "losses"        : l,
+            "total"         : t,
+            "winrate"       : wr,
+            "profit"        : p,
+            "streak"        : cs,
+            "max_w"         : max_w,
+            "max_l"         : max_l,
+            "avg_w_streak"  : avg_w,   # moyenne des séries gagnantes
+            "avg_l_streak"  : avg_l,   # moyenne des séries perdantes
         }
 
     def today(self, symbol=None):
@@ -389,7 +432,9 @@ class Stats:
                 f"   Profit: {s['profit']:.2f}$ "
                 f"({s['total']} trades)\n"
                 f"   Série: {sk} | "
-                f"MaxW:{s['max_w']} MaxL:{s['max_l']}"
+                f"MaxW:{s['max_w']} MaxL:{s['max_l']}\n"
+                f"   Moy. série W:{s['avg_w_streak']:.1f} | "
+                f"Moy. série L:{s['avg_l_streak']:.1f}"
             )
 
         def fmt_sym(sym):
@@ -651,7 +696,7 @@ class TradingBot:
                 self.m1_ok[sym] = True
                 log.info("%s | M1 pret (%d bougies)", info["name"], len(buf))
 
-            if self.m1_ok[sym] and self.m15_ok[sym] and len(buf) >= 3:
+            if self.m1_ok[sym] and self.m15_ok[sym] and len(buf) >= 4:
                 self._check_signal(sym)
 
     def _ohlc(self, data):
@@ -676,7 +721,7 @@ class TradingBot:
             buf = self.m1[sym]
             if buf and candle.time != buf[-1].time:
                 buf.append(candle)
-                if self.m1_ok[sym] and self.m15_ok[sym]:
+                if self.m1_ok[sym] and self.m15_ok[sym] and len(buf) >= 4:
                     self._check_signal(sym)
             elif buf:
                 buf[-1] = candle
@@ -701,36 +746,28 @@ class TradingBot:
 
         now = time.time()
         last = self.last_sig.get(sym, 0)
-        if now - last < CONFIG["cooldown"] * 60:
+        if CONFIG["cooldown"] > 0 and now - last < CONFIG["cooldown"] * 60:
             return
 
         candles = list(self.m1[sym])
-        if len(candles) < 3:
+        # Au moins 3 bougies clôturées + 1 en cours
+        if len(candles) < 4:
             return
 
-        current = candles[-1]
+        # On exclut la bougie en cours (dernière) et on travaille
+        # sur les bougies entièrement clôturées
+        candles_closed = candles[:-1]
+        current = candles_closed[-1]
+
         zone = self.zd.find_zone(current, self.zones[sym], current.time)
         if zone is None:
-            # aucune zone touchée, on sort sans log
             return
 
-        # LOG quand une zone est touchée
-        log.info(
-            "[TOUCH] %s | zone type=%d | zone[%.5f - %.5f] | candle o=%.5f h=%.5f l=%.5f c=%.5f",
-            sym, zone.type, zone.low, zone.high,
-            current.open, current.high, current.low, current.close
-        )
-
-        direction, pattern = Patterns.scan(candles, zone.type)
+        direction, pattern = Patterns.scan(candles_closed, zone.type)
         if direction == 0:
-            # zone touchée mais aucun pattern valide
-            log.info(
-                "[NOPATTERN] %s | zone type=%d touchee mais aucun pattern detecte",
-                sym, zone.type
-            )
             return
 
-        # SIGNAL: zone touchée + pattern valide
+        # SIGNAL: zone touchée + pattern valide (sur bougie clôturée)
         zone.touch_count += 1
         self.last_sig[sym] = now
         ctype = "CALL" if direction == 1 else "PUT"
@@ -835,9 +872,9 @@ if __name__ == "__main__":
     ╔═══════════════════════════════════════╗
     ║   🎯 LIQUIDITY ZONE TRADING BOT v2.1  ║
     ║                                       ║
-    ║   V10 → 30min expiry                  ║
-    ║   V25 → 15min expiry                  ║
-    ║   V75 → 15min expiry                  ║
+    ║   V10 → 5min expiry                   ║
+    ║   V25 → 5min expiry                   ║
+    ║   V75 → 5min expiry                   ║
     ║                                       ║
     ║   Touches: 10 | Doji: ON              ║
     ║   Trades simultanés: OUI              ║
